@@ -2,156 +2,187 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 
-# Configuration de la page web (Doit impérativement être la première commande Streamlit)
-st.set_page_config(page_title="PSA Production Analytics", layout="wide")
+# --- CONFIGURATION INTERFACE ---
+st.set_page_config(page_title="PSA Dashboard Pro", layout="wide", initial_sidebar_state="expanded")
 
-st.title("🏭 Application d'Analyse Approfondie de Production PSA")
-st.markdown("Importez votre historique 2025 pour analyser la saisonnalité, le process et la qualité par produit et épaisseur.")
+# --- DESIGN & STYLE CSS ---
+st.markdown("""
+    <style>
+    .main { background-color: #f1f5f9; }
+    div[data-testid="stMetricValue"] { font-size: 28px; font-weight: bold; color: #1e3a8a; }
+    .stTabs [data-baseweb="tab"] { font-size: 16px; font-weight: 600; }
+    </style>
+    """, unsafe_content_type=True)
 
-# 1. Zone d'importation du fichier Excel
-uploaded_file = st.file_uploader("Glissez-déposez le fichier 'History Prod PSA 2025.xlsx' ici", type=["xlsx"])
+st.title("🏭 Dashboard de Performance Industrielle - Ligne PSA")
+st.markdown("### Analyse Avancée Multi-Dimensionnelle : Saisonnalité, Épaisseurs de Parements & Qualité")
+
+# --- BARRE LATÉRALE D'IMPORTATION ---
+st.sidebar.header("📂 Données d'Entrée")
+uploaded_file = st.sidebar.file_uploader("Charger l'extraction 'History Prod PSA 2025.xlsx'", type=["xlsx"])
 
 if uploaded_file is not None:
-    with st.spinner('Analyse et calculs des données en cours...'):
-        # Lecture du fichier Excel
+    with st.spinner('Extraction et parsing des parements en cours...'):
         df = pd.read_excel(uploaded_file)
         
-        # Nettoyage et préparation des dates
+        # 1. Gestion et standardisation des dates
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         df['Mois_Nom'] = df['Date'].dt.strftime('%m - %B')
         
-        # Harmonisation automatique des colonnes d'après ton fichier réel
-        renommage = {
-            'Ep Mousse(la': 'Ep_mousse',
-            'Ep_mousse': 'Ep_mousse',
-            'production': 'production',
-            'Chutes': 'Chutes',
-            'Densité': 'Densité',
-            'Mousse': 'Mousse',
-            'Modèle': 'Modèle',
-            'Produit': 'Produit',
-            'Cause défaut': 'Cause_defaut'
+        # 2. Renommage des colonnes standards
+        renames = {
+            'Ep Mousse(la': 'Ep_mousse', 'Ep_mousse': 'Ep_mousse', 
+            'production': 'production', 'Modèle': 'Modèle', 'Produit': 'Produit'
         }
-        df = df.rename(columns={k: v for k, v in renommage.items() if k in df.columns})
+        df = df.rename(columns={k: v for k, v in renames.items() if k in df.columns})
+        
+        # Gestion des chutes (Chutes ou Chutes EXT)
+        if 'Chutes EXT' in df.columns:
+            df['Chutes'] = df['Chutes EXT']
+        elif 'Chutes' in df.columns:
+            pass
+        else:
+            df['Chutes'] = 0
 
-        # Forcer le type numérique pour éviter les bugs de calcul
-        cols_num = ['production', 'Production Théorique', 'Chutes', 'Densité', 'Ep_mousse']
+        # 3. EXTRACTION INTELLIGENTE DES ÉPAISSEURS DE PAREMENTS
+        # Pandas renomme la 2ème colonne "Dimension" en "Dimension.1" d'après ton Excel
+        if 'Dimension' in df.columns:
+            # On prend les caractères avant le 'x' (ex: 0.25x1165.0 -> 0.25)
+            df['Ep_Parement_Ext'] = df['Dimension'].astype(str).str.split('x').str[0].str.strip()
+            df['Ep_Parement_Ext'] = pd.to_numeric(df['Ep_Parement_Ext'], errors='coerce').fillna(0)
+        else:
+            df['Ep_Parement_Ext'] = 0
+
+        if 'Dimension.1' in df.columns:
+            df['Ep_Parement_Int'] = df['Dimension.1'].astype(str).str.split('x').str[0].str.strip()
+            df['Ep_Parement_Int'] = pd.to_numeric(df['Ep_Parement_Int'], errors='coerce').fillna(0)
+        else:
+            df['Ep_Parement_Int'] = 0
+
+        # Nettoyage types numériques
+        cols_num = ['production', 'Chutes', 'Densité', 'Ep_mousse']
         for c in cols_num:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
 
-    st.success("✓ Données chargées avec succès !")
+    st.success("✓ Fichier PSA importé et analysé avec succès !")
 
-    # =====================================================================
-    # EN-TÊTES / KPIS GLOBAUX
-    # =====================================================================
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Production Totale Renseignée", f"{int(df['production'].sum()):,} m²")
-    with col2:
-        st.metric("Total des Chutes Générées", f"{int(df['Chutes'].sum()):,} m²")
-    with col3:
-        if 'Production Théorique' in df.columns and df['Production Théorique'].sum() > 0:
-            rendement_global = (df['production'].sum() / df['Production Théorique'].sum() * 100)
-            st.metric("Rendement Global Ligne (TRG)", f"{rendement_global:.1f} %")
-        else:
-            st.metric("Rendement Global Ligne (TRG)", "N/A (Col. Théorique absente)")
-
-    # Création des onglets pour organiser l'application web
-    onglet1, onglet2, onglet3 = st.tabs(["📈 Saisonnalité Détaillée", "🧪 Analyse Process & Densité", "❌ Qualité & Pertes"])
-
-    # =====================================================================
-    # ONGLET 1 : SAISONNALITÉ INTERACTIVE
-    # =====================================================================
-    with onglet1:
-        st.header("Analyse Granulaire de la Saisonnalité")
+    # --- BARRE LATÉRALE : FILTRES STRATÉGIQUES ---
+    st.sidebar.header("🎯 Filtres Dynamiques")
+    
+    liste_produits = sorted(list(df['Produit'].dropna().unique()))
+    selected_produit = st.sidebar.selectbox("Sélectionner un Produit Principal", options=['Tous'] + liste_produits)
+    
+    # Filtrage progressif
+    df_step = df.copy()
+    if selected_produit != 'Tous':
+        df_step = df_step[df_step['Produit'] == selected_produit]
         
-        if 'Produit' in df.columns and 'Modèle' in df.columns and 'Ep_mousse' in df.columns:
-            # Menu déroulant dynamique pour filtrer par produit sur le site
-            f_produit = st.selectbox("Choisir un Produit pour filtrer les courbes", options=['Tous'] + list(df['Produit'].unique()))
-            
-            df_filtre = df.copy()
-            if f_produit != 'Tous':
-                df_filtre = df_filtre[df_filtre['Produit'] == f_produit]
-                
-            # Pivot des volumes mensuels par Modèle et Épaisseur
-            pivot_vol = df_filtre.groupby(['Mois_Nom', 'Modèle', 'Ep_mousse'])['production'].sum().unstack(level=0).fillna(0)
-            
-            if not pivot_vol.empty:
-                # Calcul des indices de saisonnalité (Mois / Moyenne du segment)
-                pivot_indices = pivot_vol.div(pivot_vol.mean(axis=1), axis=0).round(2).reset_index()
-                
-                st.subheader("Tableau Dynamique des Indices Saisonniers (Moyenne du segment = 1.0)")
-                st.dataframe(pivot_indices, use_container_width=True)
-                
-                # Préparation des données pour le graphique linéaire interactif
-                df_melt = pivot_indices.melt(id_vars=['Modèle', 'Ep_mousse'], var_name='Mois', value_name='Indice')
-                df_melt['Segment'] = df_melt['Modèle'].astype(str) + " - " + df_melt['Ep_mousse'].astype(str) + "mm"
-                
-                st.subheader("Courbes de Saisonnalité Interactives")
-                fig_sais = px.line(df_melt, x='Mois', y='Indice', color='Segment', markers=True,
-                                   title=f"Évolution des Indices Saisonniers pour : {f_produit}")
-                fig_sais.add_hline(y=1.0, line_dash="dash", line_color="red", annotation_text="Seuil Moyen (1.0)")
-                st.plotly_chart(fig_sais, use_container_width=True)
-            else:
-                st.warning("Aucune donnée de production trouvée pour ce filtre.")
-        else:
-            st.error("Les colonnes nécessaires ('Produit', 'Modèle', 'Ep_mousse') sont introuvables dans le fichier.")
+    liste_modeles = sorted(list(df_step['Modèle'].dropna().unique()))
+    selected_modeles = st.sidebar.multiselect("Filtrer par Modèle(s)", options=liste_modeles, default=liste_modeles[:4])
+    
+    # Application finale des filtres
+    df_filtered = df_step[df_step['Modèle'].isin(selected_modeles)]
 
     # =====================================================================
-    # ONGLET 2 : PROCESS & MACHINE
+    # SECTION 1 : PANNEAU DES INDICATEURS CLÉS (KPIS)
     # =====================================================================
-    with onglet2:
-        st.header("Comportement Technique de la Ligne")
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    with kpi1:
+        st.metric("Volume Produit Filé", f"{int(df_filtered['production'].sum()):,} m²")
+    with kpi2:
+        tot_chutes = df_filtered['Chutes'].sum()
+        tot_prod = df_filtered['production'].sum()
+        taux_rebut = (tot_chutes / tot_prod * 100) if tot_prod > 0 else 0
+        st.metric("Taux de Chutes Généré", f"{taux_rebut:.2f} %")
+    with kpi3:
+        avg_dens = df_filtered[df_filtered['Densité'] > 0]['Densité'].mean()
+        st.metric("Densité Moyenne Chimie", f"{avg_dens:.1f} kg/m³" if not np.isnan(avg_dens) else "N/A")
+    with kpi4:
+        mix_count = df_filtered.groupby(['Modèle', 'Ep_mousse', 'Ep_Parement_Ext', 'Ep_Parement_Int']).ngroups
+        st.metric("Combinaisons de Mix Actives", mix_count)
+
+    # =====================================================================
+    # SECTION 2 : ONGLETS D'ANALYSE AVANCÉE
+    # =====================================================================
+    tab1, tab2, tab3 = st.tabs(["📊 Saisonnalité Globale & Indices", "🔬 Structure Produits & Parements", "📉 Analyse Qualité & Procédé"])
+
+    # --- TAB 1 : SAISONNALITÉ ---
+    with tab1:
+        st.subheader("Analyse Matricielle des Profils Saisonniers")
+        col_t1_1, col_t1_2 = st.columns([2, 1])
+        
+        with col_t1_1:
+            st.markdown("**🔥 Carte de Chaleur (Heatmap) des Volumes Produits (m²)**")
+            # Pivot complet volume
+            pivot_heat = df_filtered.groupby(['Modèle', 'Mois_Nom'])['production'].sum().unstack().fillna(0)
+            if not pivot_heat.empty:
+                fig_heat = px.imshow(pivot_heat, text_auto=True, aspect="auto", color_continuous_scale='Blues',
+                                     labels=dict(x="Mois de l'Année", y="Modèle PSA", color="Volume (m²)"))
+                st.plotly_chart(fig_heat, use_container_width=True)
+            else:
+                st.info("Sélectionnez des modèles dans la barre latérale pour afficher la Heatmap.")
+
+        with col_t1_2:
+            st.markdown("**📈 Courbes d'Indices Saisonniers Granulaires**")
+            if not pivot_heat.empty:
+                # Calcul de l'indice de saisonnalité
+                pivot_indices = pivot_heat.div(pivot_heat.mean(axis=1), axis=0).round(2).reset_index()
+                df_melt = pivot_indices.melt(id_vars='Modèle', var_name='Mois', value_name='Indice')
+                
+                fig_line = px.line(df_melt, x='Mois', y='Indice', color='Modèle', markers=True,
+                                   title="Variation Relative (Base moyenne = 1.0)")
+                fig_line.add_hline(y=1.0, line_dash="dash", line_color="red")
+                st.plotly_chart(fig_line, use_container_width=True)
+
+    # --- TAB 2 : ANATOMIE DES PAREMENTS ---
+    with tab2:
+        st.subheader("Cartographie Technique des Épaisseurs de Métal")
         col_p1, col_p2 = st.columns(2)
         
         with col_p1:
-            st.subheader("Stabilité de la Densité (Capabilité Chimie)")
-            if 'Mousse' in df.columns and 'Densité' in df.columns:
-                # Boîte à moustaches interactive Plotly
-                fig_box = px.box(df[df['Densité'] > 0], x='Mousse', y='Densité', color='Mousse',
-                                 title="Dispersion de la densité par type de formulation")
-                st.plotly_chart(fig_box, use_container_width=True)
-            else:
-                st.info("Les colonnes 'Mousse' ou 'Densité' ne sont pas détectées.")
-                
-        with col_p2:
-            st.subheader("Rendement Moyen par Épaisseur de Mousse")
-            if 'Production Théorique' in df.columns and 'Ep_mousse' in df.columns:
-                df['Rendement_Ligne'] = np.where(df['Production Théorique'] > 0, (df['production'] / df['Production Théorique']) * 100, np.nan)
-                df_rend = df.groupby('Ep_mousse')['Rendement_Ligne'].mean().reset_index().dropna()
-                
-                fig_bar_rend = px.bar(df_rend, x='Ep_mousse', y='Rendement_Ligne', 
-                                      labels={'Ep_mousse': 'Épaisseur (mm)', 'Rendement_Ligne': 'Rendement Moyen (%)'},
-                                      color='Rendement_Ligne', color_continuous_scale='Blues')
-                st.plotly_chart(fig_bar_rend, use_container_width=True)
-            else:
-                st.info("Données d'épaisseurs ou de production théorique insuffisantes pour calculer le rendement machine.")
-
-    # =====================================================================
-    # ONGLET 3 : QUALITÉ & PERTES
-    # =====================================================================
-    with onglet3:
-        st.header("Analyse des Rebus Matière")
-        
-        col_cause = 'Cause_defaut' if 'Cause_defaut' in df.columns else ('Cause défaut' if 'Cause défaut' in df.columns else None)
-        
-        if col_cause and 'Chutes' in df.columns:
-            pareto_data = df.groupby(col_cause)['Chutes'].sum().sort_values(ascending=False).reset_index()
+            st.markdown("**🍩 Distribution des Épaisseurs (Parement Extérieur)**")
+            fig_pie_ext = px.pie(df_filtered, names='Ep_Parement_Ext', values='production', hole=0.4,
+                                 color_discrete_sequence=px.colors.qualitative.Safe)
+            st.plotly_chart(fig_pie_ext, use_container_width=True)
             
-            col_q1, col_q2 = st.columns([2, 1])
-            with col_q1:
-                fig_pareto = px.bar(pareto_data, x='Chutes', y=col_cause, orientation='h',
-                                    title="Volume total de chutes (m²) par cause de défaut",
-                                    color='Chutes', color_continuous_scale='Reds_r')
-                fig_pareto.update_layout(yaxis={'categoryorder':'total ascending'})
-                st.plotly_chart(fig_pareto, use_container_width=True)
-                
-            with col_q2:
-                st.subheader("Classement des Pertes")
-                st.dataframe(pareto_data, use_container_width=True)
-        else:
-            st.info("Les colonnes liées aux défauts ou aux chutes de production ne sont pas présentes.")
+        with col_p2:
+            st.markdown("**🍩 Distribution des Épaisseurs (Parement Intérieur)**")
+            fig_pie_int = px.pie(df_filtered, names='Ep_Parement_Int', values='production', hole=0.4,
+                                 color_discrete_sequence=px.colors.qualitative.Modern)
+            st.plotly_chart(fig_pie_int, use_container_width=True)
+            
+        st.markdown("---")
+        st.markdown("**🌳 Arborescence Multi-Couches (Sunburst Chart du Mix Produit)**")
+        st.write("Ce graphique interactif se lit du centre vers l'extérieur : Produit ➔ Épaisseur Mousse ➔ Épaisseur Extérieure ➔ Épaisseur Intérieure.")
+        
+        # Graphique Sunburst haut de gamme pour l'analyse industrielle
+        fig_sun = px.sunburst(df_filtered, path=['Produit', 'Ep_mousse', 'Ep_Parement_Ext', 'Ep_Parement_Int'], 
+                              values='production', color='production', color_continuous_scale='YlOrRd')
+        st.plotly_chart(fig_sun, use_container_width=True)
+
+    # --- TAB 3 : QUALITÉ & DISPERSION ---
+    with tab3:
+        st.subheader("Suivi de l'Efficience et Capabilité Ligne")
+        col_g1, col_g2 = st.columns(2)
+        
+        with col_g1:
+            st.markdown("**⚖️ Stabilité de la Densité de Mousse par Épaisseur**")
+            fig_box = px.box(df_filtered[df_filtered['Densité'] > 0], x='Ep_mousse', y='Densité', color='Ep_mousse',
+                             title="Dispersion de la densité matière")
+            st.plotly_chart(fig_box, use_container_width=True)
+            
+        with col_g2:
+            st.markdown("**📉 Évolution Temporelle des Chutes Industrielles (m²)**")
+            df_time = df_filtered.groupby('Mois_Nom')['Chutes'].sum().reset_index()
+            fig_bar_chutes = px.bar(df_time, x='Mois_Nom', y='Chutes', color='Chutes', color_continuous_scale='Reds')
+            st.plotly_chart(fig_bar_chutes, use_container_width=True)
+
+    # --- DATA EXPLORER ---
+    with st.expander("🔍 Explorateur de Données Brutes Filtrées (Aperçu des Colonnes Parements Ext/Int)"):
+        st.dataframe(df_filtered[['Date', 'Produit', 'Modèle', 'Ep_mousse', 'Ep_Parement_Ext', 'Ep_Parement_Int', 'production', 'Chutes']], use_container_width=True)
+
 else:
-    st.info("💡 En attente de l'importation de votre fichier Excel pour démarrer l'analyse approfondie.")
+    st.info("👋 Bienvenue sur votre nouveau Dashboard PSA ! Veuillez charger votre fichier Excel dans la barre latérale gauche pour générer les analyses complexes.")
