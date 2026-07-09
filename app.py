@@ -4,7 +4,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-# --- CONFIGURATION INTERFACE (Doit rester la première commande) ---
+# --- CONFIGURATION INTERFACE (Doit rester la toute première commande) ---
 st.set_page_config(page_title="PSA Dashboard Pro", layout="wide", initial_sidebar_state="expanded")
 
 st.title("🏭 Dashboard de Performance Industrielle - Ligne PSA")
@@ -37,7 +37,7 @@ if uploaded_file is not None:
         else:
             df['Chutes'] = 0
 
-        # 3. EXTRACTION DES ÉPAISSEURS DE PAREMENTS
+        # 3. EXTRACTION DES ÉPAISSEURS DE PAREMENTS (Découpage de "0.25x1165.0" -> 0.25)
         if 'Dimension' in df.columns:
             df['Ep_Parement_Ext'] = df['Dimension'].astype(str).str.split('x').str[0].str.strip()
             df['Ep_Parement_Ext'] = pd.to_numeric(df['Ep_Parement_Ext'], errors='coerce').fillna(0)
@@ -50,7 +50,7 @@ if uploaded_file is not None:
         else:
             df['Ep_Parement_Int'] = 0
 
-        # Nettoyage types numériques
+        # Nettoyage des types numériques pour les calculs sans bugs
         cols_num = ['production', 'Chutes', 'Densité', 'Ep_mousse']
         for c in cols_num:
             if c in df.columns:
@@ -122,7 +122,7 @@ if uploaded_file is not None:
                 fig_line.add_hline(y=1.0, line_dash="dash", line_color="red")
                 st.plotly_chart(fig_line, use_container_width=True)
 
-    # --- TAB 2 : ANATOMIE DES PAREMENTS ---
+    # --- TAB 2 : ANATOMIE DES PAREMENTS (SÉCURISÉ) ---
     with tab2:
         st.subheader("Cartographie Technique des Épaisseurs de Métal")
         col_p1, col_p2 = st.columns(2)
@@ -143,9 +143,26 @@ if uploaded_file is not None:
         st.markdown("**🌳 Arborescence Multi-Couches (Sunburst Chart du Mix Produit)**")
         st.write("Ce graphique interactif se lit du centre vers l'extérieur : Produit ➔ Épaisseur Mousse ➔ Épaisseur Extérieure ➔ Épaisseur Intérieure.")
         
-        fig_sun = px.sunburst(df_filtered, path=['Produit', 'Ep_mousse', 'Ep_Parement_Ext', 'Ep_Parement_Int'], 
-                              values='production', color='production', color_continuous_scale='YlOrRd')
-        st.plotly_chart(fig_sun, use_container_width=True)
+        # Nettoyage et typage strict en texte pour éliminer définitivement l'erreur hiérarchique Plotly
+        df_sunburst = df_filtered[
+            (df_filtered['production'] > 0) & 
+            (df_filtered['Produit'].notna()) & 
+            (df_filtered['Ep_mousse'] > 0)
+        ].copy()
+        
+        df_sunburst['Ep_mousse'] = df_sunburst['Ep_mousse'].astype(str) + " mm"
+        df_sunburst['Ep_Parement_Ext'] = "Ext: " + df_sunburst['Ep_Parement_Ext'].astype(str)
+        df_sunburst['Ep_Parement_Int'] = "Int: " + df_sunburst['Ep_Parement_Int'].astype(str)
+
+        if not df_sunburst.empty:
+            fig_sun = px.sunburst(df_sunburst, 
+                                  path=['Produit', 'Ep_mousse', 'Ep_Parement_Ext', 'Ep_Parement_Int'], 
+                                  values='production', 
+                                  color='production', 
+                                  color_continuous_scale='YlOrRd')
+            st.plotly_chart(fig_sun, use_container_width=True)
+        else:
+            st.info("Données insuffisantes ou nulles pour générer l'arborescence complète.")
 
     # --- TAB 3 : QUALITÉ ---
     with tab3:
