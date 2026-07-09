@@ -15,7 +15,7 @@ st.sidebar.header("📂 Données d'Entrée")
 uploaded_file = st.sidebar.file_uploader("Charger l'extraction 'History Prod PSA 2025.xlsx'", type=["xlsx"])
 
 if uploaded_file is not None:
-    with st.spinner('Extraction et parsing des parements en cours...'):
+    with st.spinner('Extraction et parsing automatique des parements...'):
         df = pd.read_excel(uploaded_file)
         
         # 1. Gestion et standardisation des dates
@@ -37,18 +37,27 @@ if uploaded_file is not None:
         else:
             df['Chutes'] = 0
 
-        # 3. EXTRACTION DES ÉPAISSEURS DE PAREMENTS (Découpage de "0.25x1165.0" -> 0.25)
-        if 'Dimension' in df.columns:
-            df['Ep_Parement_Ext'] = df['Dimension'].astype(str).str.split('x').str[0].str.strip()
-            df['Ep_Parement_Ext'] = pd.to_numeric(df['Ep_Parement_Ext'], errors='coerce').fillna(0)
+        # 3. IDENTIFICATION ROBUSTE DES DEUX COLONNES "DIMENSION" PAR POSITION
+        # On cherche toutes les colonnes qui s'appellent "Dimension" ou commencent par "Dimension"
+        dimension_cols = [c for c in df.columns if str(c).startswith('Dimension')]
+        
+        if len(dimension_cols) >= 2:
+            # La 1ère trouvée = Parement Extérieur
+            col_ext = dimension_cols[0]
+            # La 2ème trouvée = Parement Intérieur
+            col_int = dimension_cols[1]
+            
+            # Extraction des épaisseurs (ex: "0.25x1165.0" -> "0.25")
+            df['Ep_Parement_Ext'] = df[col_ext].astype(str).str.split('x').str[0].str.strip()
+            df['Ep_Parement_Int'] = df[col_int].astype(str).str.split('x').str[0].str.strip()
         else:
-            df['Ep_Parement_Ext'] = 0
+            # Fallback de secours si jamais les noms ont été modifiés à l'import
+            df['Ep_Parement_Ext'] = "Inconnu"
+            df['Ep_Parement_Int'] = "Inconnu"
 
-        if 'Dimension.1' in df.columns:
-            df['Ep_Parement_Int'] = df['Dimension.1'].astype(str).str.split('x').str[0].str.strip()
-            df['Ep_Parement_Int'] = pd.to_numeric(df['Ep_Parement_Int'], errors='coerce').fillna(0)
-        else:
-            df['Ep_Parement_Int'] = 0
+        # Conversion propre en chaînes textuelles propres pour éviter le mélange avec les 0 numériques
+        df['Ep_Parement_Ext'] = df['Ep_Parement_Ext'].replace(['nan', '0', '0.0'], 'Non spécifié')
+        df['Ep_Parement_Int'] = df['Ep_Parement_Int'].replace(['nan', '0', '0.0'], 'Non spécifié')
 
         # Nettoyage des types numériques pour les calculs sans bugs
         cols_num = ['production', 'Chutes', 'Densité', 'Ep_mousse']
@@ -122,7 +131,7 @@ if uploaded_file is not None:
                 fig_line.add_hline(y=1.0, line_dash="dash", line_color="red")
                 st.plotly_chart(fig_line, use_container_width=True)
 
-    # --- TAB 2 : ANATOMIE DES PAREMENTS (SÉCURISÉ) ---
+    # --- TAB 2 : ANATOMIE DES PAREMENTS ---
     with tab2:
         st.subheader("Cartographie Technique des Épaisseurs de Métal")
         col_p1, col_p2 = st.columns(2)
@@ -143,20 +152,19 @@ if uploaded_file is not None:
         st.markdown("**🌳 Arborescence Multi-Couches (Sunburst Chart du Mix Produit)**")
         st.write("Ce graphique interactif se lit du centre vers l'extérieur : Produit ➔ Épaisseur Mousse ➔ Épaisseur Extérieure ➔ Épaisseur Intérieure.")
         
-        # Nettoyage et typage strict en texte pour éliminer définitivement l'erreur hiérarchique Plotly
+        # Préparation propre du Sunburst pour éviter tout crash hiérarchique
         df_sunburst = df_filtered[
             (df_filtered['production'] > 0) & 
-            (df_filtered['Produit'].notna()) & 
-            (df_filtered['Ep_mousse'] > 0)
+            (df_filtered['Produit'].notna())
         ].copy()
         
-        df_sunburst['Ep_mousse'] = df_sunburst['Ep_mousse'].astype(str) + " mm"
-        df_sunburst['Ep_Parement_Ext'] = "Ext: " + df_sunburst['Ep_Parement_Ext'].astype(str)
-        df_sunburst['Ep_Parement_Int'] = "Int: " + df_sunburst['Ep_Parement_Int'].astype(str)
+        df_sunburst['Mousse'] = df_sunburst['Ep_mousse'].astype(str) + " mm"
+        df_sunburst['Face_Ext'] = "Ext: " + df_sunburst['Ep_Parement_Ext'].astype(str)
+        df_sunburst['Face_Int'] = "Int: " + df_sunburst['Ep_Parement_Int'].astype(str)
 
         if not df_sunburst.empty:
             fig_sun = px.sunburst(df_sunburst, 
-                                  path=['Produit', 'Ep_mousse', 'Ep_Parement_Ext', 'Ep_Parement_Int'], 
+                                  path=['Produit', 'Mousse', 'Face_Ext', 'Face_Int'], 
                                   values='production', 
                                   color='production', 
                                   color_continuous_scale='YlOrRd')
