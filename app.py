@@ -4,17 +4,8 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-# --- CONFIGURATION INTERFACE ---
+# --- CONFIGURATION INTERFACE (Doit rester la première commande) ---
 st.set_page_config(page_title="PSA Dashboard Pro", layout="wide", initial_sidebar_state="expanded")
-
-# --- DESIGN & STYLE CSS ---
-st.markdown("""
-    <style>
-    .main { background-color: #f1f5f9; }
-    div[data-testid="stMetricValue"] { font-size: 28px; font-weight: bold; color: #1e3a8a; }
-    .stTabs [data-baseweb="tab"] { font-size: 16px; font-weight: 600; }
-    </style>
-    """, unsafe_content_type=True)
 
 st.title("🏭 Dashboard de Performance Industrielle - Ligne PSA")
 st.markdown("### Analyse Avancée Multi-Dimensionnelle : Saisonnalité, Épaisseurs de Parements & Qualité")
@@ -38,7 +29,7 @@ if uploaded_file is not None:
         }
         df = df.rename(columns={k: v for k, v in renames.items() if k in df.columns})
         
-        # Gestion des chutes (Chutes ou Chutes EXT)
+        # Gestion des chutes
         if 'Chutes EXT' in df.columns:
             df['Chutes'] = df['Chutes EXT']
         elif 'Chutes' in df.columns:
@@ -46,10 +37,8 @@ if uploaded_file is not None:
         else:
             df['Chutes'] = 0
 
-        # 3. EXTRACTION INTELLIGENTE DES ÉPAISSEURS DE PAREMENTS
-        # Pandas renomme la 2ème colonne "Dimension" en "Dimension.1" d'après ton Excel
+        # 3. EXTRACTION DES ÉPAISSEURS DE PAREMENTS
         if 'Dimension' in df.columns:
-            # On prend les caractères avant le 'x' (ex: 0.25x1165.0 -> 0.25)
             df['Ep_Parement_Ext'] = df['Dimension'].astype(str).str.split('x').str[0].str.strip()
             df['Ep_Parement_Ext'] = pd.to_numeric(df['Ep_Parement_Ext'], errors='coerce').fillna(0)
         else:
@@ -75,7 +64,6 @@ if uploaded_file is not None:
     liste_produits = sorted(list(df['Produit'].dropna().unique()))
     selected_produit = st.sidebar.selectbox("Sélectionner un Produit Principal", options=['Tous'] + liste_produits)
     
-    # Filtrage progressif
     df_step = df.copy()
     if selected_produit != 'Tous':
         df_step = df_step[df_step['Produit'] == selected_produit]
@@ -83,7 +71,6 @@ if uploaded_file is not None:
     liste_modeles = sorted(list(df_step['Modèle'].dropna().unique()))
     selected_modeles = st.sidebar.multiselect("Filtrer par Modèle(s)", options=liste_modeles, default=liste_modeles[:4])
     
-    # Application finale des filtres
     df_filtered = df_step[df_step['Modèle'].isin(selected_modeles)]
 
     # =====================================================================
@@ -116,7 +103,6 @@ if uploaded_file is not None:
         
         with col_t1_1:
             st.markdown("**🔥 Carte de Chaleur (Heatmap) des Volumes Produits (m²)**")
-            # Pivot complet volume
             pivot_heat = df_filtered.groupby(['Modèle', 'Mois_Nom'])['production'].sum().unstack().fillna(0)
             if not pivot_heat.empty:
                 fig_heat = px.imshow(pivot_heat, text_auto=True, aspect="auto", color_continuous_scale='Blues',
@@ -128,7 +114,6 @@ if uploaded_file is not None:
         with col_t1_2:
             st.markdown("**📈 Courbes d'Indices Saisonniers Granulaires**")
             if not pivot_heat.empty:
-                # Calcul de l'indice de saisonnalité
                 pivot_indices = pivot_heat.div(pivot_heat.mean(axis=1), axis=0).round(2).reset_index()
                 df_melt = pivot_indices.melt(id_vars='Modèle', var_name='Mois', value_name='Indice')
                 
@@ -151,19 +136,18 @@ if uploaded_file is not None:
         with col_p2:
             st.markdown("**🍩 Distribution des Épaisseurs (Parement Intérieur)**")
             fig_pie_int = px.pie(df_filtered, names='Ep_Parement_Int', values='production', hole=0.4,
-                                 color_discrete_sequence=px.colors.qualitative.Modern)
+                                 color_discrete_sequence=px.colors.qualitative.Pastel)
             st.plotly_chart(fig_pie_int, use_container_width=True)
             
         st.markdown("---")
         st.markdown("**🌳 Arborescence Multi-Couches (Sunburst Chart du Mix Produit)**")
         st.write("Ce graphique interactif se lit du centre vers l'extérieur : Produit ➔ Épaisseur Mousse ➔ Épaisseur Extérieure ➔ Épaisseur Intérieure.")
         
-        # Graphique Sunburst haut de gamme pour l'analyse industrielle
         fig_sun = px.sunburst(df_filtered, path=['Produit', 'Ep_mousse', 'Ep_Parement_Ext', 'Ep_Parement_Int'], 
                               values='production', color='production', color_continuous_scale='YlOrRd')
         st.plotly_chart(fig_sun, use_container_width=True)
 
-    # --- TAB 3 : QUALITÉ & DISPERSION ---
+    # --- TAB 3 : QUALITÉ ---
     with tab3:
         st.subheader("Suivi de l'Efficience et Capabilité Ligne")
         col_g1, col_g2 = st.columns(2)
@@ -181,7 +165,7 @@ if uploaded_file is not None:
             st.plotly_chart(fig_bar_chutes, use_container_width=True)
 
     # --- DATA EXPLORER ---
-    with st.expander("🔍 Explorateur de Données Brutes Filtrées (Aperçu des Colonnes Parements Ext/Int)"):
+    with st.expander("🔍 Explorateur de Données Brutes Filtrées"):
         st.dataframe(df_filtered[['Date', 'Produit', 'Modèle', 'Ep_mousse', 'Ep_Parement_Ext', 'Ep_Parement_Int', 'production', 'Chutes']], use_container_width=True)
 
 else:
