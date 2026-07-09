@@ -254,6 +254,7 @@ def update_dashboard(json_data, selected_produit, selected_modeles, active_tab):
 
     return kpi_vol_str, kpi_reb_str, kpi_den_str, kpi_mix_str, content
 
-# --- DÉMARRAGE DU SERVEUR ---
+# --- DÉMARRAGE DU SERVEUR COMPATIBLE ENVIRENNEMENT CLOUD ---
 if __name__ == '__main__':
-    app.run_server(debug=False)
+    # On utilise la méthode moderne .run() et on adapte le port pour éviter les blocages
+    app.run(host='0.0.0.0', port=8051, debug=False)
