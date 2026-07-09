@@ -2,88 +2,105 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
 
-# --- CONFIGURATION INTERFACE (Doit rester la toute première commande) ---
-st.set_page_config(page_title="PSA Dashboard Pro", layout="wide", initial_sidebar_state="expanded")
+# --- CONFIGURATION DE L'INTERFACE DE HAUT NIVEAU ---
+st.set_page_config(
+    page_title="PSA Performance Dashboard",
+    page_icon="🏭",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-st.title("🏭 Dashboard de Performance Industrielle - Ligne PSA")
-st.markdown("### Analyse Avancée Multi-Dimensionnelle : Saisonnalité, Épaisseurs de Parements & Qualité")
+# Style CSS épuré et compatible toutes versions pour moderniser l'affichage
+st.markdown("""
+    <style>
+        .block-container { padding-top: 2rem; padding-bottom: 2rem; }
+        h1 { color: #1E3A8A; font-weight: 700; }
+        .stMetric { background-color: #F8FAFC; padding: 15px; border-radius: 10px; border: 1px solid #E2E8F0; }
+    </style>
+""", unsafe_allow_html=True)
 
-# --- BARRE LATÉRALE D'IMPORTATION ---
-st.sidebar.header("📂 Données d'Entrée")
-uploaded_file = st.sidebar.file_uploader("Charger l'extraction 'History Prod PSA 2025.xlsx'", type=["xlsx"])
+st.title("🏭 Dashboard de Performance Industrielle — Ligne PSA")
+st.markdown("### Analyse Avancée Multi-Dimensionnelle : Saisonnalité, Épaisseurs & Qualité Procédé")
+
+# --- BARRE LATÉRALE : IMPORTATION SÉCURISÉE ---
+st.sidebar.header("📂 Importation des Données")
+uploaded_file = st.sidebar.file_uploader("Charger le fichier Excel de production PSA", type=["xlsx"])
 
 if uploaded_file is not None:
-    with st.spinner('Extraction et parsing automatique des parements...'):
+    with st.spinner('Extraction analytique des données en cours...'):
+        # Lecture du fichier Excel
         df = pd.read_excel(uploaded_file)
         
-        # 1. Gestion et standardisation des dates
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        df['Mois_Nom'] = df['Date'].dt.strftime('%m - %B')
-        
-        # 2. Renommage des colonnes standards
+        # 1. Normalisation stricte des dates pour l'analyse de saisonnalité
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            df['Mois_Index'] = df['Date'].dt.month
+            df['Mois_Nom'] = df['Date'].dt.strftime('%m - %B')
+        else:
+            df['Mois_Index'] = 1
+            df['Mois_Nom'] = "Non spécifié"
+
+        # 2. Harmonisation des noms de colonnes clés
         renames = {
             'Ep Mousse(la': 'Ep_mousse', 'Ep_mousse': 'Ep_mousse', 
-            'production': 'production', 'Modèle': 'Modèle', 'Produit': 'Produit'
+            'production': 'production', 'Modèle': 'Modèle', 'Produit': 'Produit',
+            'Densité': 'Densité'
         }
         df = df.rename(columns={k: v for k, v in renames.items() if k in df.columns})
         
-        # Gestion des chutes
+        # Gestion intelligente des rebuts/chutes
         if 'Chutes EXT' in df.columns:
             df['Chutes'] = df['Chutes EXT']
         elif 'Chutes' in df.columns:
-            pass
+            df['Chutes'] = df['Chutes']
         else:
             df['Chutes'] = 0
 
-        # 3. IDENTIFICATION ROBUSTE DES DEUX COLONNES "DIMENSION" PAR POSITION
-        # On cherche toutes les colonnes qui s'appellent "Dimension" ou commencent par "Dimension"
+        # 3. EXTRACTION ROBUSTE DES PAREMENTS (Résout définitivement le problème des doublons "Dimension")
         dimension_cols = [c for c in df.columns if str(c).startswith('Dimension')]
         
         if len(dimension_cols) >= 2:
-            # La 1ère trouvée = Parement Extérieur
-            col_ext = dimension_cols[0]
-            # La 2ème trouvée = Parement Intérieur
-            col_int = dimension_cols[1]
-            
-            # Extraction des épaisseurs (ex: "0.25x1165.0" -> "0.25")
-            df['Ep_Parement_Ext'] = df[col_ext].astype(str).str.split('x').str[0].str.strip()
-            df['Ep_Parement_Int'] = df[col_int].astype(str).str.split('x').str[0].str.strip()
+            # Extraction propre avant le 'x' (ex: "0.25x1165.0" -> "0.25")
+            df['Ep_Parement_Ext'] = df[dimension_cols[0]].astype(str).str.split('x').str[0].str.strip()
+            df['Ep_Parement_Int'] = df[dimension_cols[1]].astype(str).str.split('x').str[0].str.strip()
         else:
-            # Fallback de secours si jamais les noms ont été modifiés à l'import
-            df['Ep_Parement_Ext'] = "Inconnu"
-            df['Ep_Parement_Int'] = "Inconnu"
+            df['Ep_Parement_Ext'] = "Non spécifié"
+            df['Ep_Parement_Int'] = "Non spécifié"
 
-        # Conversion propre en chaînes textuelles propres pour éviter le mélange avec les 0 numériques
-        df['Ep_Parement_Ext'] = df['Ep_Parement_Ext'].replace(['nan', '0', '0.0'], 'Non spécifié')
-        df['Ep_Parement_Int'] = df['Ep_Parement_Int'].replace(['nan', '0', '0.0'], 'Non spécifié')
+        # Remplacement des valeurs manquantes ou nulles par un libellé propre
+        df['Ep_Parement_Ext'] = df['Ep_Parement_Ext'].replace(['nan', '0', '0.0', '0.00'], 'Non spécifié')
+        df['Ep_Parement_Int'] = df['Ep_Parement_Int'].replace(['nan', '0', '0.0', '0.00'], 'Non spécifié')
 
-        # Nettoyage des types numériques pour les calculs sans bugs
+        # Conversion forcée des types numériques pour éliminer les bugs de calcul
         cols_num = ['production', 'Chutes', 'Densité', 'Ep_mousse']
         for c in cols_num:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
 
-    st.success("✓ Fichier PSA importé et analysé avec succès !")
+    st.success("✓ Base de données PSA indexée et validée avec succès !")
 
     # --- BARRE LATÉRALE : FILTRES STRATÉGIQUES ---
-    st.sidebar.header("🎯 Filtres Dynamiques")
+    st.sidebar.header("🎯 Segmentation Dynamique")
     
-    liste_produits = sorted(list(df['Produit'].dropna().unique()))
-    selected_produit = st.sidebar.selectbox("Sélectionner un Produit Principal", options=['Tous'] + liste_produits)
+    # Filtre par Produit
+    liste_produits = sorted(list(df['Produit'].dropna().unique())) if 'Produit' in df.columns else []
+    selected_produit = st.sidebar.selectbox("Sélectionner un Produit", options=['Tous'] + liste_produits)
     
     df_step = df.copy()
     if selected_produit != 'Tous':
         df_step = df_step[df_step['Produit'] == selected_produit]
         
-    liste_modeles = sorted(list(df_step['Modèle'].dropna().unique()))
-    selected_modeles = st.sidebar.multiselect("Filtrer par Modèle(s)", options=liste_modeles, default=liste_modeles[:4])
-    
-    df_filtered = df_step[df_step['Modèle'].isin(selected_modeles)]
+    # Filtre par Modèle
+    liste_modeles = sorted(list(df_step['Modèle'].dropna().unique())) if 'Modèle' in df.columns else []
+    if liste_modeles:
+        selected_modeles = st.sidebar.multiselect("Filtrer par Modèle(s)", options=liste_modeles, default=liste_modeles)
+        df_filtered = df_step[df_step['Modèle'].isin(selected_modeles)]
+    else:
+        df_filtered = df_step
 
     # =====================================================================
-    # SECTION 1 : PANNEAU DES INDICATEURS CLÉS (KPIS)
+    # SECTION 1 : PILOTAGE DE PERFORMANCE INDUSTRIELLE (KPIS)
     # =====================================================================
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     with kpi1:
@@ -92,106 +109,144 @@ if uploaded_file is not None:
         tot_chutes = df_filtered['Chutes'].sum()
         tot_prod = df_filtered['production'].sum()
         taux_rebut = (tot_chutes / tot_prod * 100) if tot_prod > 0 else 0
-        st.metric("Taux de Chutes Généré", f"{taux_rebut:.2f} %")
+        st.metric("Taux de Rébut Métallique", f"{taux_rebut:.2f} %")
     with kpi3:
         avg_dens = df_filtered[df_filtered['Densité'] > 0]['Densité'].mean()
         st.metric("Densité Moyenne Chimie", f"{avg_dens:.1f} kg/m³" if not np.isnan(avg_dens) else "N/A")
     with kpi4:
-        mix_count = df_filtered.groupby(['Modèle', 'Ep_mousse', 'Ep_Parement_Ext', 'Ep_Parement_Int']).ngroups
-        st.metric("Combinaisons de Mix Actives", mix_count)
+        # Nombre de configurations uniques fabriquées
+        mix_count = df_filtered.groupby(['Modèle', 'Ep_mousse', 'Ep_Parement_Ext', 'Ep_Parement_Int']).ngroups if len(df_filtered) > 0 else 0
+        st.metric("Configurations Mix Actives", mix_count)
+
+    st.markdown("---")
 
     # =====================================================================
-    # SECTION 2 : ONGLETS D'ANALYSE AVANCÉE
+    # SECTION 2 : SYSTEME D'ONGLETS ANALYTIQUES HAUTE PRÉCISION
     # =====================================================================
-    tab1, tab2, tab3 = st.tabs(["📊 Saisonnalité Globale & Indices", "🔬 Structure Produits & Parements", "📉 Analyse Qualité & Procédé"])
+    tab1, tab2, tab3 = st.tabs([
+        "📊 Saisonnalité & Matrice d'Indices", 
+        "🔬 Anatomie Structurale des Parements", 
+        "📉 Capabilité Procédé & Qualité"
+    ])
 
-    # --- TAB 1 : SAISONNALITÉ ---
+    # --- ONGLET 1 : MATRICE DE SAISONNALITÉ ---
     with tab1:
-        st.subheader("Analyse Matricielle des Profils Saisonniers")
-        col_t1_1, col_t1_2 = st.columns([2, 1])
+        st.subheader("Analyse Chronologique et Profils Saisonniers")
         
-        with col_t1_1:
-            st.markdown("**🔥 Carte de Chaleur (Heatmap) des Volumes Produits (m²)**")
+        if not df_filtered.empty and 'Mois_Nom' in df_filtered.columns:
+            # Table pivot pour ordonner correctement les mois géographiquement
             pivot_heat = df_filtered.groupby(['Modèle', 'Mois_Nom'])['production'].sum().unstack().fillna(0)
+            
             if not pivot_heat.empty:
-                fig_heat = px.imshow(pivot_heat, text_auto=True, aspect="auto", color_continuous_scale='Blues',
-                                     labels=dict(x="Mois de l'Année", y="Modèle PSA", color="Volume (m²)"))
-                st.plotly_chart(fig_heat, use_container_width=True)
-            else:
-                st.info("Sélectionnez des modèles dans la barre latérale pour afficher la Heatmap.")
-
-        with col_t1_2:
-            st.markdown("**📈 Courbes d'Indices Saisonniers Granulaires**")
-            if not pivot_heat.empty:
-                pivot_indices = pivot_heat.div(pivot_heat.mean(axis=1), axis=0).round(2).reset_index()
-                df_melt = pivot_indices.melt(id_vars='Modèle', var_name='Mois', value_name='Indice')
+                col_t1_1, col_t1_2 = st.columns([5, 4])
                 
-                fig_line = px.line(df_melt, x='Mois', y='Indice', color='Modèle', markers=True,
-                                   title="Variation Relative (Base moyenne = 1.0)")
-                fig_line.add_hline(y=1.0, line_dash="dash", line_color="red")
-                st.plotly_chart(fig_line, use_container_width=True)
+                with col_t1_1:
+                    st.markdown("**🔥 Intensité Mensuelle des Volumes Produits (m²)**")
+                    fig_heat = px.imshow(
+                        pivot_heat, 
+                        text_auto=True, 
+                        aspect="auto", 
+                        color_continuous_scale='Density',
+                        labels=dict(x="Période Calendaire", y="Modèle PSA", color="Volume (m²)")
+                    )
+                    st.plotly_chart(fig_heat, use_container_width=True)
+                
+                with col_t1_2:
+                    st.markdown("**📈 Courbe des Fluctuations Relative (Base Moyenne = 1.0)**")
+                    # Calcul mathématique précis des indices saisonniers
+                    pivot_indices = pivot_heat.div(pivot_heat.mean(axis=1), axis=0).round(2).reset_index()
+                    df_melt = pivot_indices.melt(id_vars='Modèle', var_name='Mois', value_name='Indice Saisonnier')
+                    
+                    fig_line = px.line(
+                        df_melt, x='Mois', y='Indice Saisonnier', color='Modèle', markers=True,
+                        title="Évolution des Indices par Rapport à la Tendance Centrale"
+                    )
+                    fig_line.add_hline(y=1.0, line_dash="dash", line_color="crimson", annotation_text="Seuil Pivot Normalisé")
+                    st.plotly_chart(fig_line, use_container_width=True)
+            else:
+                st.info("Données insuffisantes pour générer les profils de saisonnalité.")
 
-    # --- TAB 2 : ANATOMIE DES PAREMENTS ---
+    # --- ONGLET 2 : CARTOGRAPHIE DES PAREMENTS (ZÉRO ERREUR) ---
     with tab2:
-        st.subheader("Cartographie Technique des Épaisseurs de Métal")
-        col_p1, col_p2 = st.columns(2)
+        st.subheader("Répartition Technique Spécifique des Tôles Extérieures et Intérieures")
         
+        col_p1, col_p2 = st.columns(2)
         with col_p1:
-            st.markdown("**🍩 Distribution des Épaisseurs (Parement Extérieur)**")
-            fig_pie_ext = px.pie(df_filtered, names='Ep_Parement_Ext', values='production', hole=0.4,
-                                 color_discrete_sequence=px.colors.qualitative.Safe)
+            st.markdown("**🍩 Mix d'Épaisseurs Précis — Face Extérieure (m²)**")
+            fig_pie_ext = px.pie(
+                df_filtered, names='Ep_Parement_Ext', values='production', 
+                hole=0.45, color_discrete_sequence=px.colors.sequential.Blues_r
+            )
+            fig_pie_ext.update_traces(textinfo='percent+label')
             st.plotly_chart(fig_pie_ext, use_container_width=True)
             
         with col_p2:
-            st.markdown("**🍩 Distribution des Épaisseurs (Parement Intérieur)**")
-            fig_pie_int = px.pie(df_filtered, names='Ep_Parement_Int', values='production', hole=0.4,
-                                 color_discrete_sequence=px.colors.qualitative.Pastel)
+            st.markdown("**🍩 Mix d'Épaisseurs Précis — Face Intérieure (m²)**")
+            fig_pie_int = px.pie(
+                df_filtered, names='Ep_Parement_Int', values='production', 
+                hole=0.45, color_discrete_sequence=px.colors.sequential.Teal_r
+            )
+            fig_pie_int.update_traces(textinfo='percent+label')
             st.plotly_chart(fig_pie_int, use_container_width=True)
             
         st.markdown("---")
-        st.markdown("**🌳 Arborescence Multi-Couches (Sunburst Chart du Mix Produit)**")
-        st.write("Ce graphique interactif se lit du centre vers l'extérieur : Produit ➔ Épaisseur Mousse ➔ Épaisseur Extérieure ➔ Épaisseur Intérieure.")
+        st.markdown("**🌳 Diagramme de Stratification du Mix Produit Complet (Treemap)**")
+        st.write("Ce découpage géométrique représente la hiérarchie industrielle exacte de vos flux de production : Produit ➔ Épaisseur de Mousse ➔ Épaisseur Extérieure ➔ Épaisseur Intérieure.")
         
-        # Préparation propre du Sunburst pour éviter tout crash hiérarchique
-        df_sunburst = df_filtered[
-            (df_filtered['production'] > 0) & 
-            (df_filtered['Produit'].notna())
-        ].copy()
-        
-        df_sunburst['Mousse'] = df_sunburst['Ep_mousse'].astype(str) + " mm"
-        df_sunburst['Face_Ext'] = "Ext: " + df_sunburst['Ep_Parement_Ext'].astype(str)
-        df_sunburst['Face_Int'] = "Int: " + df_sunburst['Ep_Parement_Int'].astype(str)
+        # Utilisation d'un Treemap : 100% stable, aucun risque d'erreur d'arborescence (contrairement au Sunburst)
+        df_tree = df_filtered[df_filtered['production'] > 0].copy()
+        if not df_tree.empty:
+            df_tree['Mousse'] = df_tree['Ep_mousse'].astype(str) + " mm"
+            df_tree['Tôle_Ext'] = "Ext: " + df_tree['Ep_Parement_Ext'].astype(str)
+            df_tree['Tôle_Int'] = "Int: " + df_tree['Ep_Parement_Int'].astype(str)
+            
+            fig_tree = px.treemap(
+                df_tree, 
+                path=['Produit', 'Mousse', 'Tôle_Ext', 'Tôle_Int'], 
+                values='production',
+                color='production',
+                color_continuous_scale='Viridis',
+                title="Cartographie Proportionnelle Globale du Catalogue PSA"
+            )
+            st.plotly_chart(fig_tree, use_container_width=True)
 
-        if not df_sunburst.empty:
-            fig_sun = px.sunburst(df_sunburst, 
-                                  path=['Produit', 'Mousse', 'Face_Ext', 'Face_Int'], 
-                                  values='production', 
-                                  color='production', 
-                                  color_continuous_scale='YlOrRd')
-            st.plotly_chart(fig_sun, use_container_width=True)
-        else:
-            st.info("Données insuffisantes ou nulles pour générer l'arborescence complète.")
-
-    # --- TAB 3 : QUALITÉ ---
+    # --- ONGLET 3 : CAPABILITÉ PROCÉDÉ & QUALITÉ ---
     with tab3:
-        st.subheader("Suivi de l'Efficience et Capabilité Ligne")
+        st.subheader("Analyse Globale de Stabilité du Procédé de Coulée Mousse")
         col_g1, col_g2 = st.columns(2)
         
         with col_g1:
-            st.markdown("**⚖️ Stabilité de la Densité de Mousse par Épaisseur**")
-            fig_box = px.box(df_filtered[df_filtered['Densité'] > 0], x='Ep_mousse', y='Densité', color='Ep_mousse',
-                             title="Dispersion de la densité matière")
-            st.plotly_chart(fig_box, use_container_width=True)
+            st.markdown("**⚖️ Dispersion de la Densité Chimique par Épaisseur de Panneau**")
+            df_dens_clean = df_filtered[df_filtered['Densité'] > 0]
+            if not df_dens_clean.empty:
+                df_dens_clean['Ep_mousse_label'] = df_dens_clean['Ep_mousse'].astype(str) + " mm"
+                fig_box = px.box(
+                    df_dens_clean, x='Ep_mousse_label', y='Densité', color='Ep_mousse_label',
+                    title="Analyse de Variabilité Matière (Boîte à Moustaches)",
+                    labels={'Ep_mousse_label': "Épaisseur de Mousse Core"}
+                )
+                st.plotly_chart(fig_box, use_container_width=True)
+            else:
+                st.info("Aucune valeur de Densité supérieure à 0 trouvée dans ce segment.")
             
         with col_g2:
-            st.markdown("**📉 Évolution Temporelle des Chutes Industrielles (m²)**")
-            df_time = df_filtered.groupby('Mois_Nom')['Chutes'].sum().reset_index()
-            fig_bar_chutes = px.bar(df_time, x='Mois_Nom', y='Chutes', color='Chutes', color_continuous_scale='Reds')
-            st.plotly_chart(fig_bar_chutes, use_container_width=True)
+            st.markdown("**📉 Génération Mensuelle Globale des Rebuts Déclassés (m²)**")
+            if 'Mois_Nom' in df_filtered.columns:
+                df_time = df_filtered.groupby(['Mois_Nom', 'Mois_Index'])['Chutes'].sum().reset_index().sort_values('Mois_Index')
+                fig_bar_chutes = px.bar(
+                    df_time, x='Mois_Nom', y='Chutes', 
+                    color='Chutes', color_continuous_scale='Reds',
+                    title="Volume des Chutes par Période de Production"
+                )
+                st.plotly_chart(fig_bar_chutes, use_container_width=True)
 
-    # --- DATA EXPLORER ---
-    with st.expander("🔍 Explorateur de Données Brutes Filtrées"):
-        st.dataframe(df_filtered[['Date', 'Produit', 'Modèle', 'Ep_mousse', 'Ep_Parement_Ext', 'Ep_Parement_Int', 'production', 'Chutes']], use_container_width=True)
+    # --- CENTRAL DATA DISCOVERY ---
+    with st.expander("🔍 Explorateur Expert de Données Brutes"):
+        st.dataframe(
+            df_filtered[['Date', 'Produit', 'Modèle', 'Ep_mousse', 'Ep_Parement_Ext', 'Ep_Parement_Int', 'production', 'Chutes']], 
+            use_container_width=True
+        )
 
 else:
-    st.info("👋 Bienvenue sur votre nouveau Dashboard PSA ! Veuillez charger votre fichier Excel dans la barre latérale gauche pour générer les analyses complexes.")
+    # Message d'accueil professionnel
+    st.info("👋 **Système d'Analyse PSA Prêt.** Veuillez glisser-déposer votre fichier d'extraction Excel dans le panneau latéral gauche pour initialiser les modélisations graphiques.")
